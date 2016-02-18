@@ -6,43 +6,60 @@ import (
 	"log"
 	"net/http"
 	"strings"
+
+	"bosun.org/cmd/bosun/database"
 )
 
-func main() {
-	metricRoot := "linux.net.stat.tcp."
-	baseURL := "http://bosun"
-	perRow := 4
+func RateQueryString(m MetricMetaTagKeys) string {
+	if m.Rate == "counter" {
+		return "rate{counter,,1}:"
+	}
+	return ""
+}
 
-	metrics, err := GetMetrics(baseURL, metricRoot)
+func main() {
+	metricRoot := "haproxy.server."
+	baseURL := "http://bosun"
+	perRow := 6
+	query :=
+		`$q = q("sum:$ds-avg:%s%s{host=*}", "$start", "")
+filter($q, avg($q > .1))`
+	query = `q("sum:$ds-avg:%s%s{}{host=ny-lb05|ny-lb06}", "$start", "")`
+	metrics, err := GetMetadataMetrics(baseURL)
 	if err != nil {
 		log.Fatal(err)
 	}
 	filteredMetrics := metrics.MetricsStartsWith(metricRoot)
 	gd := GrafanaDashBoard{}
-    gd.Title = "Gen Dashboard"
-    gd.Style = "dark"
-    gd.Timezone = "browser"
-    gd.Editable = true
+	gd.Title = "Gen Dashboard"
+	gd.Style = "dark"
+	gd.Timezone = "browser"
+	gd.Editable = true
+
+	span := 12 / perRow
+
 	var row Row
 	var panels []Panel
 	for i, m := range filteredMetrics {
 		if i != 0 && i%perRow == 0 {
 			row.Panels = panels
 			gd.Rows = append(gd.Rows, row)
-            log.Printf("Appending row with %v panels", len(panels))
-            row = Row{}
-            panels = []Panel{}
+			log.Printf("Appending row with %v panels", len(panels))
+			row = Row{}
+			panels = []Panel{}
 		}
 		t := Target{
-			Expr: fmt.Sprintf(`q("sum:$ds-avg:rate{counter,,1}:%s", "$start", "")`, m),
-            RefId: "A",
+			Expr:  fmt.Sprintf(query, RateQueryString(m), m.Metric),
+			RefId: "A",
 		}
-        panel := NewPanel()
-		panel.Title = m
-        panel.Datasource = "Bosun"
-        panel.Targets = []Target{t}
-        ii := i
-        panel.ID = ii
+		panel := NewPanel()
+		panel.Title = fmt.Sprintf("%s", m.Metric)
+		panel.Datasource = "Bosun"
+		panel.Targets = []Target{t}
+		panel.Span = span
+		ii := i
+		panel.ID = ii
+        panel.LeftYAxisLabel = m.Unit
 		panels = append(panels, panel)
 	}
 	b, err := json.MarshalIndent(&gd, "", "\t")
@@ -52,46 +69,77 @@ func main() {
 	fmt.Println(string(b))
 }
 
-type Metrics []string
+type Metrics []MetricMetaTagKeys
 
-func (metrics Metrics) MetricsStartsWith(prefix string) []string {
-	filteredMetrics := []string{}
+func (metrics Metrics) MetricsStartsWith(prefix string) Metrics {
+	filteredMetrics := Metrics{}
 	for _, m := range metrics {
-		if strings.HasPrefix(m, prefix) {
+		if strings.HasPrefix(m.Metric, prefix) {
+			if m.MetricMetadata == nil {
+				log.Printf("No metadata for %s, skipping", m.Metric)
+				continue
+			}
 			filteredMetrics = append(filteredMetrics, m)
 		}
 	}
 	return filteredMetrics
 }
 
-func GetMetrics(baseURL, metricRoot string) (Metrics, error) {
+type MetricMetaTagKeys struct {
+	Metric string
+	*database.MetricMetadata
+	TagKeys []string
+}
+
+func GetMetadataMetrics(baseURL string) (Metrics, error) {
 	var metrics Metrics
-	u := fmt.Sprintf("%s/api/metric", baseURL)
-	log.Println(u)
+	u := fmt.Sprintf("%s/api/metadata/metrics", baseURL)
 	res, err := http.Get(u)
 	if err != nil {
 		return metrics, fmt.Errorf("failed to get metrics")
 	}
 	defer res.Body.Close()
+	var mm map[string]MetricMetaTagKeys
 	d := json.NewDecoder(res.Body)
-	err = d.Decode(&metrics)
+	err = d.Decode(&mm)
 	if err != nil {
 		return metrics, fmt.Errorf("unable to decode metric response")
 	}
+	for k, v := range mm {
+		v.Metric = k
+		metrics = append(metrics, v)
+	}
 	return metrics, nil
 }
+
+// func GetMetrics(baseURL, metricRoot string) (Metrics, error) {
+// 	var metrics Metrics
+// 	u := fmt.Sprintf("%s/api/metric", baseURL)
+// 	log.Println(u)
+// 	res, err := http.Get(u)
+// 	if err != nil {
+// 		return metrics, fmt.Errorf("failed to get metrics")
+// 	}
+// 	defer res.Body.Close()
+// 	d := json.NewDecoder(res.Body)
+// 	err = d.Decode(&metrics)
+// 	if err != nil {
+// 		return metrics, fmt.Errorf("unable to decode metric response")
+// 	}
+// 	return metrics, nil
+// }
 
 type GrafanaDashBoard struct {
 	// Annotations struct {
 	// 	List []interface{} `json:"list"`
 	// } `json:"annotations"`
-	Editable        bool          `json:"editable"`
-	HideControls    bool          `json:"hideControls"`
-	ID              interface{}   `json:"id"`
+	Editable     bool        `json:"editable"`
+	HideControls bool        `json:"hideControls"`
+	ID           interface{} `json:"id"`
 	//Links           []interface{} `json:"links"`
 	//OriginalTitle   string        `json:"originalTitle"`
 	Rows            []Row         `json:"rows"`
-	SchemaVersion   int       `json:"schemaVersion"`
+	SchemaVersion   int           `json:"schemaVersion"`
 	SharedCrosshair bool          `json:"sharedCrosshair"`
 	Style           string        `json:"style"`
 	Tags            []interface{} `json:"tags"`
@@ -106,26 +154,26 @@ type GrafanaDashBoard struct {
 	// 	RefreshIntervals []string `json:"refresh_intervals"`
 	// 	TimeOptions      []string `json:"time_options"`
 	// } `json:"timepicker"`
-	Timezone string  `json:"timezone"`
-	Title    string  `json:"title"`
-	Version  int `json:"version"`
+	Timezone string `json:"timezone"`
+	Title    string `json:"title"`
+	Version  int    `json:"version"`
 }
 
 type Row struct {
-	Collapse bool    `json:"collapse"`
-	Editable bool    `json:"editable"`
+	Collapse bool `json:"collapse"`
+	Editable bool `json:"editable"`
 	//Height   string  `json:"height"`
-	Panels   []Panel `json:"panels"`
-	Title    string  `json:"title"`
+	Panels []Panel `json:"panels"`
+	Title  string  `json:"title"`
 }
 
 type Panel struct {
 	//AliasColors struct{} `json:"aliasColors"`
-	Bars        bool     `json:"bars"`
-	Datasource  string   `json:"datasource"`
-	Editable    bool     `json:"editable"`
-	Error       bool     `json:"error"`
-	Fill        float64  `json:"fill"`
+	Bars       bool    `json:"bars"`
+	Datasource string  `json:"datasource"`
+	Editable   bool    `json:"editable"`
+	Error      bool    `json:"error"`
+	Fill       float64 `json:"fill"`
 	// Grid        struct {
 	// 	LeftLogBase     int     `json:"leftLogBase"`
 	// 	LeftMax         interface{} `json:"leftMax"`
@@ -138,24 +186,24 @@ type Panel struct {
 	// 	Threshold2      interface{} `json:"threshold2"`
 	// 	Threshold2Color string      `json:"threshold2Color"`
 	// } `json:"grid"`
-	ID              int       `json:"id"`
-	IsNew           bool          `json:"isNew"`
-	Legend          Legend        `json:"legend"`
-	Lines           bool          `json:"lines"`
-	Linewidth       float64       `json:"linewidth"`
-	NullPointMode   string        `json:"nullPointMode"`
-	Percentage      bool          `json:"percentage"`
-	Pointradius     float64       `json:"pointradius"`
-	Points          bool          `json:"points"`
-	Renderer        string        `json:"renderer"`
+	ID            int     `json:"id"`
+	IsNew         bool    `json:"isNew"`
+	Legend        Legend  `json:"legend"`
+	Lines         bool    `json:"lines"`
+	Linewidth     float64 `json:"linewidth"`
+	NullPointMode string  `json:"nullPointMode"`
+	Percentage    bool    `json:"percentage"`
+	Pointradius   float64 `json:"pointradius"`
+	Points        bool    `json:"points"`
+	Renderer      string  `json:"renderer"`
 	//SeriesOverrides []interface{} `json:"seriesOverrides"`
-	Span            int       `json:"span"`
-	Stack           bool          `json:"stack"`
-	SteppedLine     bool          `json:"steppedLine"`
-	Targets         []Target      `json:"targets"`
+	Span        int      `json:"span"`
+	Stack       bool     `json:"stack"`
+	SteppedLine bool     `json:"steppedLine"`
+	Targets     []Target `json:"targets"`
 	//TimeFrom        interface{}   `json:"timeFrom"`
 	//TimeShift       interface{}   `json:"timeShift"`
-	Title           string        `json:"title"`
+	Title string `json:"title"`
 	//Tooltip         struct {
 	//	Shared    bool   `json:"shared"`
 	//	ValueType string `json:"value_type"`
@@ -164,12 +212,14 @@ type Panel struct {
 	X_Axis   bool     `json:"x-axis"`
 	Y_Axis   bool     `json:"y-axis"`
 	YFormats []string `json:"y_formats"`
+    LeftYAxisLabel string  `json:"leftYAxisLabel"`
+    RightYAxisLabel string  `json:"rightYAxisLabel"`
 }
 
 func NewPanel() Panel {
 	return Panel{
 		Renderer:  "flot",
-        Type: "graph",
+		Type:      "graph",
 		X_Axis:    true,
 		Y_Axis:    true,
 		YFormats:  []string{"short", "short"},
