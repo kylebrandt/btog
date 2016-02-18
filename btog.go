@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
 	"log"
 	"net/http"
@@ -17,14 +18,18 @@ func RateQueryString(m MetricMetaTagKeys) string {
 	return ""
 }
 
+var (
+	flagBaseURL    = flag.String("b", "http://bosun", "bosun root url")
+	flagMetricRoot = flag.String("m", "haproxy.server.", "get all metrics that start with this string")
+	flagPerRow     = flag.Int("p", 6, "number of graph panels per row")
+	flagQuery      = flag.String("q", `q("sum:$ds-avg:%s%s{}{host=ny-lb05|ny-lb06}", "$start", "")`, "First %s is metric, second is counter string")
+)
+
 func main() {
-	metricRoot := "haproxy.server."
-	baseURL := "http://bosun"
-	perRow := 6
-	query :=
-		`$q = q("sum:$ds-avg:%s%s{host=*}", "$start", "")
-filter($q, avg($q > .1))`
-	query = `q("sum:$ds-avg:%s%s{}{host=ny-lb05|ny-lb06}", "$start", "")`
+	metricRoot := *flagMetricRoot
+	baseURL := *flagBaseURL
+	perRow := *flagPerRow
+	query := *flagQuery
 	metrics, err := GetMetadataMetrics(baseURL)
 	if err != nil {
 		log.Fatal(err)
@@ -59,7 +64,10 @@ filter($q, avg($q > .1))`
 		panel.Span = span
 		ii := i
 		panel.ID = ii
-        panel.LeftYAxisLabel = m.Unit
+		panel.LeftYAxisLabel = m.Unit
+		if m.Desc != "" {
+			panel.Links = append(panel.Links, Link{Type: "Absolute", Title: m.Desc})
+		}
 		panels = append(panels, panel)
 	}
 	b, err := json.MarshalIndent(&gd, "", "\t")
@@ -136,7 +144,6 @@ type GrafanaDashBoard struct {
 	Editable     bool        `json:"editable"`
 	HideControls bool        `json:"hideControls"`
 	ID           interface{} `json:"id"`
-	//Links           []interface{} `json:"links"`
 	//OriginalTitle   string        `json:"originalTitle"`
 	Rows            []Row         `json:"rows"`
 	SchemaVersion   int           `json:"schemaVersion"`
@@ -191,6 +198,7 @@ type Panel struct {
 	Legend        Legend  `json:"legend"`
 	Lines         bool    `json:"lines"`
 	Linewidth     float64 `json:"linewidth"`
+	Links         []Link  `json:"links"`
 	NullPointMode string  `json:"nullPointMode"`
 	Percentage    bool    `json:"percentage"`
 	Pointradius   float64 `json:"pointradius"`
@@ -208,12 +216,12 @@ type Panel struct {
 	//	Shared    bool   `json:"shared"`
 	//	ValueType string `json:"value_type"`
 	//} `json:"tooltip"`
-	Type     string   `json:"type"`
-	X_Axis   bool     `json:"x-axis"`
-	Y_Axis   bool     `json:"y-axis"`
-	YFormats []string `json:"y_formats"`
-    LeftYAxisLabel string  `json:"leftYAxisLabel"`
-    RightYAxisLabel string  `json:"rightYAxisLabel"`
+	Type            string   `json:"type"`
+	X_Axis          bool     `json:"x-axis"`
+	Y_Axis          bool     `json:"y-axis"`
+	YFormats        []string `json:"y_formats"`
+	LeftYAxisLabel  string   `json:"leftYAxisLabel"`
+	RightYAxisLabel string   `json:"rightYAxisLabel"`
 }
 
 func NewPanel() Panel {
@@ -245,4 +253,9 @@ type Legend struct {
 	Show    bool `json:"show"`
 	Total   bool `json:"total"`
 	Values  bool `json:"values"`
+}
+
+type Link struct {
+	Type  string `json:"type"`
+	Title string `json:"title"`
 }
