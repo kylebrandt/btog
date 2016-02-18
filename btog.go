@@ -26,6 +26,7 @@ var (
 )
 
 func main() {
+	flag.Parse()
 	metricRoot := *flagMetricRoot
 	baseURL := *flagBaseURL
 	perRow := *flagPerRow
@@ -119,23 +120,6 @@ func GetMetadataMetrics(baseURL string) (Metrics, error) {
 	}
 	return metrics, nil
 }
-
-// func GetMetrics(baseURL, metricRoot string) (Metrics, error) {
-// 	var metrics Metrics
-// 	u := fmt.Sprintf("%s/api/metric", baseURL)
-// 	log.Println(u)
-// 	res, err := http.Get(u)
-// 	if err != nil {
-// 		return metrics, fmt.Errorf("failed to get metrics")
-// 	}
-// 	defer res.Body.Close()
-// 	d := json.NewDecoder(res.Body)
-// 	err = d.Decode(&metrics)
-// 	if err != nil {
-// 		return metrics, fmt.Errorf("unable to decode metric response")
-// 	}
-// 	return metrics, nil
-// }
 
 type GrafanaDashBoard struct {
 	// Annotations struct {
