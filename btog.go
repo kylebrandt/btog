@@ -19,10 +19,11 @@ func RateQueryString(m MetricMetaTagKeys) string {
 }
 
 var (
-	flagBaseURL    = flag.String("b", "http://bosun", "bosun root url")
-	flagMetricRoot = flag.String("m", "haproxy.server.", "get all metrics that start with this string")
-	flagPerRow     = flag.Int("p", 6, "number of graph panels per row")
-	flagQuery      = flag.String("q", `q("sum:$ds-avg:%s%s{}{host=ny-lb05|ny-lb06}", "$start", "")`, "First %s is metric, second is counter string")
+	flagBaseURL      = flag.String("b", "http://bosun", "bosun root url")
+	flagMetricRoot   = flag.String("m", "haproxy.server.", "get all metrics that start with this string")
+	flagPerRow       = flag.Int("p", 6, "number of graph panels per row")
+	flagTemplateVars = flag.String("t", "", "csv of template vars with an initial value, i.e. host=foo,group=baz. Would be referenced as $host and $group in query")
+	flagQuery        = flag.String("q", `q("sum:$ds-avg:%s%s{}{host=ny-lb05|ny-lb06}", "$start", "")`, "First %s is metric, second is counter string")
 )
 
 func main() {
@@ -31,15 +32,29 @@ func main() {
 	baseURL := *flagBaseURL
 	perRow := *flagPerRow
 	query := *flagQuery
+	templates := []Template{}
+	splitTemplateVars := strings.Split(*flagTemplateVars, ",")
+	if splitTemplateVars[0] != "" {
+		for _, entry := range splitTemplateVars {
+			kv := strings.Split(entry, "=")
+			if len(kv) != 2 {
+				log.Fatal("Template vars must have an initial value")
+			}
+			templates = append(templates, NewTemplate(kv[0], kv[1]))
+		}
+	}
 	metrics, err := GetMetadataMetrics(baseURL)
 	if err != nil {
 		log.Fatal(err)
 	}
 	filteredMetrics := metrics.MetricsStartsWith(metricRoot)
 	gd := GrafanaDashBoard{}
+	if len(templates) != 0 {
+		gd.Templating.List = templates
+	}
 	gd.Title = "Gen Dashboard"
 	gd.Style = "dark"
-	gd.Timezone = "browser"
+	gd.Timezone = "utc"
 	gd.Editable = true
 
 	span := 12 / perRow
@@ -134,6 +149,9 @@ type GrafanaDashBoard struct {
 	SharedCrosshair bool          `json:"sharedCrosshair"`
 	Style           string        `json:"style"`
 	Tags            []interface{} `json:"tags"`
+	Templating      struct {
+		List []Template `json:"list"`
+	} `json:"templating"`
 	// Templating      struct {
 	// 	List []interface{} `json:"list"`
 	// } `json:"templating"`
@@ -242,4 +260,48 @@ type Legend struct {
 type Link struct {
 	Type  string `json:"type"`
 	Title string `json:"title"`
+}
+
+type Template struct {
+	AllFormat string  `json:"allFormat"`
+	Current   Current `json:"current"`
+	//Datasource  interface{} `json:"datasource"`
+	IncludeAll  bool             `json:"includeAll"`
+	Multi       bool             `json:"multi"`
+	MultiFormat string           `json:"multiFormat"`
+	Name        string           `json:"name"`
+	Options     []TemplateOption `json:"options"`
+	Query       string           `json:"query"`
+	Refresh     bool             `json:"refresh"`
+	//Regex       string           `json:"regex"`
+	Type string `json:"type"`
+}
+
+type Current struct {
+	Text  string `json:"text"`
+	Value string `json:"value"`
+}
+
+type TemplateOption struct {
+	Selected bool   `json:"selected"`
+	Text     string `json:"text"`
+	Value    string `json:"value"`
+}
+
+func NewTemplate(name, value string) Template {
+	return Template{
+		AllFormat:   "glob",
+		MultiFormat: "glob",
+		Current:     Current{value, value},
+		Name:        name,
+		Options: []TemplateOption{
+			TemplateOption{
+				Selected: true,
+				Text:     value,
+				Value:    value,
+			},
+		},
+		Query: value,
+		Type:  "custom",
+	}
 }
