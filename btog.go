@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sort"
 	"strings"
 
 	"bosun.org/cmd/bosun/database"
+	"bosun.org/opentsdb"
 )
 
 func RateQueryString(m MetricMetaTagKeys) string {
@@ -19,11 +21,16 @@ func RateQueryString(m MetricMetaTagKeys) string {
 }
 
 var (
-	flagBaseURL      = flag.String("b", "http://bosun", "bosun root url")
-	flagMetricRoot   = flag.String("m", "haproxy.server.", "get all metrics that start with this string")
-	flagPerRow       = flag.Int("p", 6, "number of graph panels per row")
-	flagTemplateVars = flag.String("t", "", "csv of template vars with an initial value, i.e. host=foo,group=baz. Would be referenced as $host and $group in query")
-	flagQuery        = flag.String("q", `q("sum:$ds-avg:%s%s{}{host=ny-lb05|ny-lb06}", "$start", "")`, "First %s is metric, second is counter string")
+	flagBaseURL       = flag.String("b", "http://bosun", "bosun root url")
+	flagMetricRoot    = flag.String("m", "haproxy.server.", "get all metrics that start with this string")
+	flagPerRow        = flag.Int("p", 6, "number of graph panels per row")
+	flagTemplateVars  = flag.String("t", "", "csv of template vars with an initial value, i.e. host=foo,group=baz. Would be referenced as $host and $group in query")
+	flagQuery         = flag.String("q", `q("sum:$ds-avg:%s%s{%s}{%s}", "$start", "")`, "First %s is metric, second is counter string. Third %s is tags which are passed to tags argument, fourth %s is tags passed to grouptags arguments")
+	flagTagStar       = flag.Bool("tagstar", true, "add tags to the query in the form of key=* for all keys not present in the query (-q) flag")
+	flagGroupTags     = flag.String("grouptags", "", "Tags to use in groupby field, i.e. host=*")
+	flagWhereTags     = flag.String("wheretags", "", "Tags to use in filter/where field, i.e. host=*")
+	flagFillGroupTags = flag.Bool("fillgrouptags", false, "Fill in groupby tags with tagk=* for all tags not present in the grouptags argument")
+	flagFillWhereTags = flag.Bool("fillwheretags", false, "Fill in groupby tags with tagk=* for all tags not present in the wheretags argument")
 )
 
 func main() {
@@ -61,6 +68,7 @@ func main() {
 
 	var row Row
 	var panels []Panel
+	sort.Sort(filteredMetrics)
 	for i, m := range filteredMetrics {
 		if i != 0 && i%perRow == 0 {
 			row.Panels = panels
@@ -69,8 +77,38 @@ func main() {
 			row = Row{}
 			panels = []Panel{}
 		}
+		whereTags := opentsdb.TagSet{}
+		groupTags := opentsdb.TagSet{}
+		if *flagWhereTags != "" {
+			whereTags, err = opentsdb.ParseTags(*flagWhereTags)
+			if err != nil {
+				log.Fatal(err)
+			}
+		}
+		if *flagGroupTags != "" {
+			groupTags, err = opentsdb.ParseTags(*flagGroupTags)
+			if err != nil {
+				log.Fatal(err)
+			}
+		}
+		if *flagFillGroupTags {
+			for _, tagKey := range m.TagKeys {
+				if _, ok := groupTags[tagKey]; ok {
+					continue
+				}
+				groupTags.Merge(opentsdb.TagSet{tagKey: "*"})
+			}
+		}
+		if *flagFillWhereTags {
+			for _, tagKey := range m.TagKeys {
+				if _, ok := whereTags[tagKey]; ok {
+					continue
+				}
+				whereTags.Merge(opentsdb.TagSet{tagKey: "*"})
+			}
+		}
 		t := Target{
-			Expr:  fmt.Sprintf(query, RateQueryString(m), m.Metric),
+			Expr:  fmt.Sprintf(query, RateQueryString(m), m.Metric, groupTags.Tags(), whereTags.Tags()),
 			RefId: "A",
 		}
 		panel := NewPanel()
@@ -94,6 +132,18 @@ func main() {
 }
 
 type Metrics []MetricMetaTagKeys
+
+func (m Metrics) Len() int {
+	return len(m)
+}
+
+func (m Metrics) Less(i, j int) bool {
+	return m[i].Metric < m[j].Metric
+}
+
+func (m Metrics) Swap(i, j int) {
+	m[i], m[j] = m[j], m[i]
+}
 
 func (metrics Metrics) MetricsStartsWith(prefix string) Metrics {
 	filteredMetrics := Metrics{}
@@ -235,7 +285,7 @@ func NewPanel() Panel {
 		YFormats:  []string{"short", "short"},
 		Lines:     true,
 		Linewidth: 2,
-		Legend:    Legend{Show: true},
+		Legend:    Legend{Show: false},
 	}
 }
 
