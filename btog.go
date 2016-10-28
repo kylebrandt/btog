@@ -22,6 +22,7 @@ func RateQueryString(m MetricMetaTagKeys) string {
 
 var (
 	flagBaseURL       = flag.String("b", "http://bosun", "bosun root url")
+	flagDatasource    = flag.String("d", "Bosun", "datasource to use, defaults to 'Bosun'")
 	flagMetricRoot    = flag.String("m", "haproxy.server.", "get all metrics that start with this string")
 	flagPerRow        = flag.Int("p", 6, "number of graph panels per row")
 	flagTemplateVars  = flag.String("t", "", "csv of template vars with an initial value, i.e. host=foo,group=baz. Would be referenced as $host and $group in query")
@@ -113,12 +114,21 @@ func main() {
 		}
 		panel := NewPanel()
 		panel.Title = fmt.Sprintf("%s", m.Metric)
-		panel.Datasource = "Bosun"
+		panel.Datasource = *flagDatasource
 		panel.Targets = []Target{t}
 		panel.Span = span
 		ii := i
 		panel.ID = ii
-		panel.LeftYAxisLabel = m.Unit
+		panel.YAxes = append(panel.YAxes, Axis{
+			Show:    true,
+			Label:   m.Unit,
+			LogBase: 1,
+			Format:  "short",
+		})
+		panel.YAxes = append(panel.YAxes, Axis{
+			Show: false,
+		})
+		panel.XAxis = Axis{Show: true}
 		if m.Desc != "" {
 			panel.Links = append(panel.Links, Link{Type: "Absolute", Title: m.Desc})
 		}
@@ -268,20 +278,27 @@ type Panel struct {
 	//	Shared    bool   `json:"shared"`
 	//	ValueType string `json:"value_type"`
 	//} `json:"tooltip"`
-	Type            string   `json:"type"`
-	X_Axis          bool     `json:"x-axis"`
-	Y_Axis          bool     `json:"y-axis"`
+	Type string `json:"type"`
+	//X_Axis          bool     `json:"x-axis"`
+	//Y_Axis          bool     `json:"y-axis"`
 	YFormats        []string `json:"y_formats"`
 	LeftYAxisLabel  string   `json:"leftYAxisLabel"`
 	RightYAxisLabel string   `json:"rightYAxisLabel"`
+	YAxes           []Axis   `json:"yaxes"`
+	XAxis           Axis     `json:"xaxis"`
+}
+
+type Axis struct {
+	Show    bool   `json:"show"`
+	Label   string `json:"label,omitempty"`
+	LogBase int64  `json:"logBase,omitempty"`
+	Format  string `json:"format,omitempty"`
 }
 
 func NewPanel() Panel {
 	return Panel{
 		Renderer:  "flot",
 		Type:      "graph",
-		X_Axis:    true,
-		Y_Axis:    true,
 		YFormats:  []string{"short", "short"},
 		Lines:     true,
 		Linewidth: 2,
